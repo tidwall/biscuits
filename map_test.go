@@ -1,0 +1,355 @@
+// https://github.com/tidwall/biscuits
+//
+// Copyright 2026 Joshua J Baker. All rights reserved.
+package biscuits
+
+import (
+	"fmt"
+	"os"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/tidwall/lotsa"
+)
+
+func TestMap(t *testing.T) {
+	N := 1000000
+	T := runtime.GOMAXPROCS(0)
+	var m Map[int]
+	lotsa.Output = os.Stdout
+	print("set    ")
+	lotsa.Ops(N, T, func(i, t int) {
+		key := strconv.Itoa(i)
+		tx := m.Begin(key)
+		_, replaced, _ := tx.Set(key, i)
+		tx.End()
+		if replaced {
+			panic("!bad news")
+		}
+	})
+	m.sane(false)
+	print("get    ")
+	lotsa.Ops(N, T, func(i, t int) {
+		key := strconv.Itoa(i)
+		tx := m.Begin(key)
+		value, ok, _ := tx.Get(key)
+		tx.End()
+		if !ok || value != i {
+			panic("!bad news")
+		}
+	})
+	m.sane(false)
+	print("delete ")
+	lotsa.Ops(N, T, func(i, t int) {
+		// fmt.Printf("== DELETE %d ==\n", i)
+		key := strconv.Itoa(i)
+		tx := m.Begin(key)
+		value, deleted, err := tx.Delete(key)
+		tx.End()
+		if !deleted || value != i {
+			fmt.Printf("BAD NEWS %v %v %v %v\n", i, value, deleted, err)
+			panic("!bad news")
+		}
+	})
+	m.sane(false)
+	for i := 0; i < N; i++ {
+		key := strconv.Itoa(i)
+		tx := m.Begin(key)
+		_, ok, _ := tx.Get(key)
+		tx.End()
+		if ok {
+			panic("!bad news")
+		}
+	}
+	m.sane(false)
+}
+
+func TestClone(t *testing.T) {
+	N := 1000000
+	T := runtime.GOMAXPROCS(0)
+	var m1 Map[int]
+	lotsa.Output = nil
+	lotsa.Ops(N/2, T, func(i, t int) {
+		key := strconv.Itoa(i)
+		tx := m1.Begin(key)
+		old, replaced, err := tx.Set(key, i)
+		tx.End()
+		if err != nil {
+			panic(err)
+		}
+		if replaced {
+			panic("replaced")
+		}
+		if old != 0 {
+			panic("bad value")
+		}
+	})
+	m1.sane(false)
+	m2 := m1.Clone()
+	m1.sane(false)
+	lotsa.Ops(N/2, T, func(i, t int) {
+		i += N / 2
+		key := strconv.Itoa(i)
+		tx := m1.Begin(key)
+		tx.Set(key, i)
+		tx.End()
+		key = strconv.Itoa(i)
+		tx = m2.Begin(key)
+		tx.Set(key, -i)
+		tx.End()
+	})
+	lotsa.Ops(N/2, T, func(i, t int) {
+		key := strconv.Itoa(i)
+		tx := m1.Begin(key)
+		value, ok, err := tx.Get(key)
+		tx.End()
+		if err != nil {
+			panic(err)
+		}
+		if !ok {
+			panic("!ok")
+		}
+		if value != i {
+			panic("!mismatch")
+		}
+		tx = m2.Begin(key)
+		value, ok, err = tx.Get(key)
+		tx.End()
+		if err != nil {
+			panic(err)
+		}
+		if !ok {
+			panic("!ok")
+		}
+		if value != i {
+			panic("!mismatch")
+		}
+	})
+	lotsa.Ops(N/2, T, func(i, t int) {
+		i += N / 2
+		key := strconv.Itoa(i)
+		tx := m1.Begin(key)
+		value, ok, err := tx.Get(key)
+		tx.End()
+		if err != nil {
+			panic(err)
+		}
+		if !ok {
+			panic("!ok")
+		}
+		if value != i {
+			panic("!mismatch")
+		}
+		tx = m2.Begin(key)
+		value, ok, err = tx.Get(key)
+		tx.End()
+		if err != nil {
+			panic(err)
+		}
+		if !ok {
+			panic("!ok")
+		}
+		if value != -i {
+			panic("!mismatch")
+		}
+	})
+}
+
+func testPerfSyncMap(N, T int) {
+	keys := make([]string, N)
+	for i := range keys {
+		keys[i] = strconv.Itoa(i)
+
+	}
+
+	var m sync.Map
+	lotsa.Output = os.Stdout
+	print("insert ")
+	lotsa.Ops(N, T, func(i, t int) {
+		m.Store(keys[i], i)
+	})
+	m.Range(func(key, value any) bool {
+		return true
+	})
+
+}
+func testPerfBiscuitsMap(N, T int) {
+	keys := make([]string, N)
+	for i := range keys {
+		keys[i] = strconv.Itoa(i)
+
+	}
+	var m Map[int]
+	lotsa.Output = os.Stdout
+	print("insert ")
+	lotsa.Ops(N, T, func(i, t int) {
+		tx := m.Begin(keys[i])
+		tx.Set(keys[i], i)
+		tx.End()
+	})
+	m.Scan(func(key string, value int) bool {
+		return true
+	})
+
+}
+
+func TestPerf(t *testing.T) {
+	println("== PERF sync.Map ==")
+	N := 2500000
+	for t := 1; t <= runtime.GOMAXPROCS(0); t++ {
+		testPerfSyncMap(N, t)
+	}
+
+	println("== PERF biscuits.Map ==")
+	for t := 1; t <= runtime.GOMAXPROCS(0); t++ {
+		testPerfBiscuitsMap(N, t)
+	}
+
+}
+
+func TestExample1(t *testing.T) {
+	// Create a map
+	var m Map[string]
+
+	// Store user 512/Tom
+	tx := m.Begin("512")
+	tx.Set("512", "Tom")
+	tx.End()
+
+	// Get user
+	tx = m.Begin("512")
+	value, _, _ := tx.Get("512")
+	tx.End()
+	println(value)
+
+	// Delete user
+	tx = m.Begin("512")
+	tx.Delete("512")
+	tx.End()
+
+	// Output:
+	// Tom
+}
+
+func TestExample2(t *testing.T) {
+	// Create a map
+	var m Map[string]
+
+	// Store users
+	tx := m.Begin("512", "961", "348")
+	tx.Set("512", "Tom")
+	tx.Set("961", "Sally")
+	tx.Set("348", "Janet")
+	tx.End()
+
+	// Get two users
+	tx = m.Begin("512", "348")
+	value1, _, _ := tx.Get("512")
+	value2, _, _ := tx.Get("348")
+	tx.End()
+	println(value1)
+	println(value2)
+
+	// Delete users
+	tx = m.Begin("512", "961", "348")
+	tx.Delete("512")
+	tx.Delete("961")
+	tx.Delete("348")
+	tx.End()
+
+	// Output:
+	// Tom
+	// Janet
+}
+
+func (b *branchNode[T]) sane(print bool, hash uint64, depth int) {
+	for i := range b.nodes {
+		hash = hash << (64 - (depth << hshift)) >> (64 - (depth << hshift))
+		hash |= (uint64(i) << (depth << hshift))
+		if print {
+			fmt.Printf("%s%02d ", strings.Repeat("  ", depth), i)
+			fmt.Printf("0x%08x ", hash)
+		}
+		kind := b.states[i].kind.Load()
+		var cloned, locked bool
+		if kind >= 4 {
+			cloned = kind&kindCloned == kindCloned
+			locked = kind&kindClonedLocked == kindClonedLocked
+			kind &= 3
+		}
+		if kind == kindBranch {
+			if print {
+				fmt.Printf("branch")
+				if cloned || locked {
+					fmt.Printf("[")
+					if cloned {
+						fmt.Printf("C")
+					}
+					if locked {
+						fmt.Printf("L")
+					}
+					fmt.Printf("]")
+				}
+				fmt.Printf("\n")
+			}
+			if validateState {
+				if b.states[i].tx != nil {
+					panic("invalid state")
+				}
+			}
+			(*branchNode[T])(b.nodes[i]).sane(print, hash, depth+1)
+		} else {
+			if kind != kindLeaf {
+				panic("invalid kind")
+			}
+			leaf := (*leafNode[T])(b.nodes[i])
+			if print {
+				fmt.Printf("leaf")
+				if cloned || locked {
+					fmt.Printf("[")
+					if cloned {
+						fmt.Printf("C")
+					}
+					if locked {
+						fmt.Printf("L")
+					}
+					fmt.Printf("]")
+				}
+			}
+			if leaf == nil {
+				if print {
+					fmt.Printf("\n")
+				}
+			} else {
+				if print {
+					fmt.Printf(" ( ")
+				}
+				for i := range leaf.items {
+					ihash := hashstr(leaf.items[i].key)
+					if ihash != leaf.items[i].hash {
+						panic("invalid hash")
+					}
+					if ihash&hash != hash {
+						panic("invalid hash mask")
+					}
+					if print {
+						fmt.Printf("%s ", leaf.items[i].key)
+					}
+				}
+				if print {
+					fmt.Printf(")\n")
+				}
+			}
+		}
+	}
+}
+
+func (m *Map[T]) sane(print bool) {
+	if print {
+		fmt.Printf("== SANE ==\n")
+	}
+	m.root.sane(print, 0, 0)
+}
