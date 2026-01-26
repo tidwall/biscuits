@@ -15,7 +15,7 @@ Set, get, and delete.
 
 ```go
 // Create a map
-var m biscuits.Map[string]
+var m biscuits.Map[string, string]
 
 // Store user 512/Tom
 tx := m.Begin("512")
@@ -41,7 +41,7 @@ Multiple keys
 
 ```go
 // Create a map
-var m biscuits.Map[string]
+var m biscuits.Map[string, string]
 
 // Store users
 tx := m.Begin("512", "961", "348")

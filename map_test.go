@@ -15,10 +15,11 @@ import (
 	"github.com/tidwall/lotsa"
 )
 
-func TestMap(t *testing.T) {
+func TestMapStringKeys(t *testing.T) {
+	println("== TEST string keys ==")
 	N := 1000000
 	T := runtime.GOMAXPROCS(0)
-	var m Map[int]
+	var m Map[string, int]
 	lotsa.Output = os.Stdout
 	print("set    ")
 	lotsa.Ops(N, T, func(i, t int) {
@@ -67,10 +68,63 @@ func TestMap(t *testing.T) {
 	m.sane(false)
 }
 
+func TestMapIntKeys(t *testing.T) {
+	println("== TEST int keys ==")
+	N := 1000000
+	T := runtime.GOMAXPROCS(0)
+	var m Map[int, int]
+	lotsa.Output = os.Stdout
+	print("set    ")
+	lotsa.Ops(N, T, func(i, t int) {
+		key := i
+		tx := m.Begin(key)
+		_, replaced, _ := tx.Set(key, i)
+		tx.End()
+		if replaced {
+			panic("!bad news")
+		}
+	})
+	m.sane(false)
+	print("get    ")
+	lotsa.Ops(N, T, func(i, t int) {
+		key := i
+		tx := m.Begin(key)
+		value, ok, _ := tx.Get(key)
+		tx.End()
+		if !ok || value != i {
+			panic("!bad news")
+		}
+	})
+	m.sane(false)
+	print("delete ")
+	lotsa.Ops(N, T, func(i, t int) {
+		// fmt.Printf("== DELETE %d ==\n", i)
+		key := i
+		tx := m.Begin(key)
+		value, deleted, err := tx.Delete(key)
+		tx.End()
+		if !deleted || value != i {
+			fmt.Printf("BAD NEWS %v %v %v %v\n", i, value, deleted, err)
+			panic("!bad news")
+		}
+	})
+	m.sane(false)
+	for i := 0; i < N; i++ {
+		key := i
+		tx := m.Begin(key)
+		_, ok, _ := tx.Get(key)
+		tx.End()
+		if ok {
+			panic("!bad news")
+		}
+	}
+	m.sane(false)
+}
+
 func TestClone(t *testing.T) {
 	N := 1000000
 	T := runtime.GOMAXPROCS(0)
-	var m1 Map[int]
+	var m1 Map[string, int]
 	lotsa.Output = nil
 	lotsa.Ops(N/2, T, func(i, t int) {
 		key := strconv.Itoa(i)
@@ -158,13 +212,11 @@ func TestClone(t *testing.T) {
 	})
 }
 
-func testPerfSyncMap(N, T int) {
+func testPerfSyncMapStringKeys(N, T int) {
 	keys := make([]string, N)
 	for i := range keys {
 		keys[i] = strconv.Itoa(i)
-
 	}
-
 	var m sync.Map
 	lotsa.Output = os.Stdout
 	print("insert ")
@@ -176,13 +228,12 @@ func testPerfSyncMap(N, T int) {
 	})
 
 }
-func testPerfBiscuitsMap(N, T int) {
+func testPerfBiscuitsMapStringKeys(N, T int) {
 	keys := make([]string, N)
 	for i := range keys {
 		keys[i] = strconv.Itoa(i)
-
 	}
-	var m Map[int]
+	var m Map[string, int]
 	lotsa.Output = os.Stdout
 	print("insert ")
 	lotsa.Ops(N, T, func(i, t int) {
@@ -196,23 +247,72 @@ func testPerfBiscuitsMap(N, T int) {
 
 }
 
-func TestPerf(t *testing.T) {
-	println("== PERF sync.Map ==")
+func testPerfSyncMapIntKeys(N, T int) {
+	keys := make([]int, N)
+	for i := range keys {
+		keys[i] = i
+	}
+	var m sync.Map
+	lotsa.Output = os.Stdout
+	print("insert ")
+	lotsa.Ops(N, T, func(i, t int) {
+		m.Store(keys[i], i)
+	})
+	m.Range(func(key, value any) bool {
+		return true
+	})
+
+}
+func testPerfBiscuitsMapIntKeys(N, T int) {
+	keys := make([]int, N)
+	for i := range keys {
+		keys[i] = i
+
+	}
+	var m Map[int, int]
+	lotsa.Output = os.Stdout
+	print("insert ")
+	lotsa.Ops(N, T, func(i, t int) {
+		tx := m.Begin(keys[i])
+		tx.Set(keys[i], i)
+		tx.End()
+	})
+	m.Scan(func(key int, value int) bool {
+		return true
+	})
+
+}
+
+func TestPerfStringKeys(t *testing.T) {
+	println("== PERF sync.Map string keys ==")
 	N := 2500000
 	for t := 1; t <= runtime.GOMAXPROCS(0); t++ {
-		testPerfSyncMap(N, t)
+		testPerfSyncMapStringKeys(N, t)
 	}
 
-	println("== PERF biscuits.Map ==")
+	println("== PERF biscuits.Map string keys ==")
 	for t := 1; t <= runtime.GOMAXPROCS(0); t++ {
-		testPerfBiscuitsMap(N, t)
+		testPerfBiscuitsMapStringKeys(N, t)
+	}
+
+}
+func TestPerfIntKeys(t *testing.T) {
+	println("== PERF sync.Map int keys ==")
+	N := 2500000
+	for t := 1; t <= runtime.GOMAXPROCS(0); t++ {
+		testPerfSyncMapIntKeys(N, t)
+	}
+
+	println("== PERF biscuits.Map int keys ==")
+	for t := 1; t <= runtime.GOMAXPROCS(0); t++ {
+		testPerfBiscuitsMapIntKeys(N, t)
 	}
 
 }
 
 func TestExample1(t *testing.T) {
 	// Create a map
-	var m Map[string]
+	var m Map[string, string]
 
 	// Store user 512/Tom
 	tx := m.Begin("512")
@@ -236,7 +336,7 @@ func TestExample1(t *testing.T) {
 
 func TestExample2(t *testing.T) {
 	// Create a map
-	var m Map[string]
+	var m Map[string, string]
 
 	// Store users
 	tx := m.Begin("512", "961", "348")
@@ -265,7 +365,7 @@ func TestExample2(t *testing.T) {
 	// Janet
 }
 
-func (b *branchNode[T]) sane(print bool, hash uint64, depth int) {
+func (b *branchNode[K, V]) sane(print bool, hash uint64, depth int) {
 	for i := range b.nodes {
 		hash = hash << (64 - (depth << hshift)) >> (64 - (depth << hshift))
 		hash |= (uint64(i) << (depth << hshift))
@@ -300,12 +400,12 @@ func (b *branchNode[T]) sane(print bool, hash uint64, depth int) {
 					panic("invalid state")
 				}
 			}
-			(*branchNode[T])(b.nodes[i]).sane(print, hash, depth+1)
+			(*branchNode[K, V])(b.nodes[i]).sane(print, hash, depth+1)
 		} else {
 			if kind != kindLeaf {
 				panic("invalid kind")
 			}
-			leaf := (*leafNode[T])(b.nodes[i])
+			leaf := (*leafNode[K, V])(b.nodes[i])
 			if print {
 				fmt.Printf("leaf")
 				if cloned || locked {
@@ -328,7 +428,7 @@ func (b *branchNode[T]) sane(print bool, hash uint64, depth int) {
 					fmt.Printf(" ( ")
 				}
 				for i := range leaf.items {
-					ihash := hashstr(leaf.items[i].key)
+					ihash := hashkey(leaf.items[i].key)
 					if ihash != leaf.items[i].hash {
 						panic("invalid hash")
 					}
@@ -336,7 +436,7 @@ func (b *branchNode[T]) sane(print bool, hash uint64, depth int) {
 						panic("invalid hash mask")
 					}
 					if print {
-						fmt.Printf("%s ", leaf.items[i].key)
+						fmt.Printf("%v ", leaf.items[i].key)
 					}
 				}
 				if print {
@@ -347,7 +447,7 @@ func (b *branchNode[T]) sane(print bool, hash uint64, depth int) {
 	}
 }
 
-func (m *Map[T]) sane(print bool) {
+func (m *Map[K, V]) sane(print bool) {
 	if print {
 		fmt.Printf("== SANE ==\n")
 	}
