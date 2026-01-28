@@ -20,6 +20,7 @@ func TestMapStringKeys(t *testing.T) {
 	N := 1000000
 	T := runtime.GOMAXPROCS(0)
 	var m Map[string, int]
+	m.validate = true
 	lotsa.Output = os.Stdout
 	print("set    ")
 	lotsa.Ops(N, T, func(i, t int) {
@@ -73,6 +74,7 @@ func TestMapIntKeys(t *testing.T) {
 	N := 1000000
 	T := runtime.GOMAXPROCS(0)
 	var m Map[int, int]
+	m.validate = true
 	lotsa.Output = os.Stdout
 	print("set    ")
 	lotsa.Ops(N, T, func(i, t int) {
@@ -125,6 +127,7 @@ func TestClone(t *testing.T) {
 	N := 1000000
 	T := runtime.GOMAXPROCS(0)
 	var m1 Map[string, int]
+	m1.validate = true
 	lotsa.Output = nil
 	lotsa.Ops(N/2, T, func(i, t int) {
 		key := strconv.Itoa(i)
@@ -365,7 +368,9 @@ func TestExample2(t *testing.T) {
 	// Janet
 }
 
-func (b *branchNode[K, V]) sane(print bool, hash uint64, depth int) {
+func (b *branchNode[K, V]) sane(print bool, hash uint64, depth int,
+	validate bool,
+) {
 	for i := range b.nodes {
 		hash = hash << (64 - (depth << hshift)) >> (64 - (depth << hshift))
 		hash |= (uint64(i) << (depth << hshift))
@@ -395,12 +400,12 @@ func (b *branchNode[K, V]) sane(print bool, hash uint64, depth int) {
 				}
 				fmt.Printf("\n")
 			}
-			if validateState {
+			if validate {
 				if b.states[i].txid != 0 {
 					panic("invalid state")
 				}
 			}
-			(*branchNode[K, V])(b.nodes[i]).sane(print, hash, depth+1)
+			(*branchNode[K, V])(b.nodes[i]).sane(print, hash, depth+1, validate)
 		} else {
 			if kind != kindLeaf {
 				panic("invalid kind")
@@ -451,5 +456,5 @@ func (m *Map[K, V]) sane(print bool) {
 	if print {
 		fmt.Printf("== SANE ==\n")
 	}
-	m.root.sane(print, 0, 0)
+	m.root.sane(print, 0, 0, m.validate)
 }
