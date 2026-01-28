@@ -39,10 +39,15 @@ const (
 	kindClonedLocked = 16 // bit 4
 )
 
+var txidc atomic.Uintptr
+
 type Tx[K keytype, V any] struct {
-	hashes []uint64
-	ended  bool
-	m      *Map[K, V]
+	id          uintptr
+	withonehash bool
+	onehash     uint64
+	hashes0     []uint64
+	ended       bool
+	m           *Map[K, V]
 }
 
 type item[K keytype, V any] struct {
@@ -57,7 +62,7 @@ type leafNode[K keytype, V any] struct {
 
 type state[K keytype, V any] struct {
 	kind atomic.Int32
-	tx   *Tx[K, V]
+	txid uintptr
 	lock sync.Mutex
 }
 
@@ -126,7 +131,7 @@ func (b *branchNode[K, V]) cow(i int) {
 	b.states[i].kind.Store(kind)
 }
 
-func (b *branchNode[K, V]) lock(hash uint64, tx *Tx[K, V], depth int) {
+func (b *branchNode[K, V]) lock(hash uint64, txid uintptr, depth int) {
 	i := (hash >> (depth << hshift)) & (nnodes - 1)
 	for {
 		kind := b.states[i].kind.Load()
@@ -136,17 +141,17 @@ func (b *branchNode[K, V]) lock(hash uint64, tx *Tx[K, V], depth int) {
 			continue
 		}
 		if kind == kindBranch {
-			(*branchNode[K, V])(b.nodes[i]).lock(hash, tx, depth+1)
+			(*branchNode[K, V])(b.nodes[i]).lock(hash, txid, depth+1)
 			break
 		}
 		b.states[i].lock.Lock()
 		kind = b.states[i].kind.Load()
 		if kind == kindLeaf {
 			if validateState {
-				if b.states[i].tx != nil {
+				if b.states[i].txid != 0 {
 					panic("invalid state")
 				}
-				b.states[i].tx = tx
+				b.states[i].txid = txid
 			}
 			break
 		}
@@ -159,15 +164,15 @@ func (b *branchNode[K, V]) lock(hash uint64, tx *Tx[K, V], depth int) {
 	}
 }
 
-func (b *branchNode[K, V]) unlock(hash uint64, tx *Tx[K, V], depth int) {
+func (b *branchNode[K, V]) unlock(hash uint64, txid uintptr, depth int) {
 	i := (hash >> (depth << hshift)) & (nnodes - 1)
 	kind := b.states[i].kind.Load()
 	if kind == kindBranch {
-		(*branchNode[K, V])(b.nodes[i]).unlock(hash, tx, depth+1)
+		(*branchNode[K, V])(b.nodes[i]).unlock(hash, txid, depth+1)
 		return
 	}
 	if validateState {
-		if b.states[i].tx != tx {
+		if b.states[i].txid != txid {
 			panic("invalid state")
 		}
 	}
@@ -177,7 +182,7 @@ func (b *branchNode[K, V]) unlock(hash uint64, tx *Tx[K, V], depth int) {
 		b.states[i].kind.Store(kindBranch)
 	}
 	if validateState {
-		b.states[i].tx = nil
+		b.states[i].txid = 0
 	}
 	b.states[i].lock.Unlock()
 }
@@ -195,7 +200,7 @@ func (b *branchNode[K, V]) setAfterSplit(depth int, leaf *leafNode[K, V]) {
 	}
 }
 
-func (b *branchNode[K, V]) set(item item[K, V], tx *Tx[K, V], split bool,
+func (b *branchNode[K, V]) set(item item[K, V], txid uintptr, split bool,
 	depth int,
 ) (old V, replaced bool) {
 	i := (item.hash >> (depth << hshift)) & (nnodes - 1)
@@ -204,7 +209,7 @@ func (b *branchNode[K, V]) set(item item[K, V], tx *Tx[K, V], split bool,
 		var split2 bool
 		if kind == kindLeafSplit {
 			if validateState {
-				if b.states[i].tx != tx {
+				if b.states[i].txid != txid {
 					panic("invalid state")
 				}
 				if b.states[i].lock.TryLock() {
@@ -214,10 +219,10 @@ func (b *branchNode[K, V]) set(item item[K, V], tx *Tx[K, V], split bool,
 			split2 = true
 		}
 		child := (*branchNode[K, V])(b.nodes[i])
-		return child.set(item, tx, split2, depth+1)
+		return child.set(item, txid, split2, depth+1)
 	}
 	if validateState {
-		if b.states[i].tx != tx {
+		if b.states[i].txid != txid {
 			panic("invalid state")
 		}
 		if b.states[i].lock.TryLock() {
@@ -247,14 +252,14 @@ func (b *branchNode[K, V]) set(item item[K, V], tx *Tx[K, V], split bool,
 	return old, false
 }
 
-func (b *branchNode[K, V]) get(hash uint64, key K, tx *Tx[K, V], depth int,
+func (b *branchNode[K, V]) get(hash uint64, key K, txid uintptr, depth int,
 ) (value V, replaced bool) {
 	i := (hash >> (depth << hshift)) & (nnodes - 1)
 	kind := b.states[i].kind.Load()
 	if kind == kindBranch || kind == kindLeafSplit {
 		if kind == kindLeafSplit {
 			if validateState {
-				if b.states[i].tx != tx {
+				if b.states[i].txid != txid {
 					panic("invalid state")
 				}
 				if b.states[i].lock.TryLock() {
@@ -263,10 +268,10 @@ func (b *branchNode[K, V]) get(hash uint64, key K, tx *Tx[K, V], depth int,
 			}
 		}
 		child := (*branchNode[K, V])(b.nodes[i])
-		return child.get(hash, key, tx, depth+1)
+		return child.get(hash, key, txid, depth+1)
 	}
 	if validateState {
-		if b.states[i].tx != tx {
+		if b.states[i].txid != txid {
 			panic("invalid state")
 		}
 		if b.states[i].lock.TryLock() {
@@ -284,14 +289,14 @@ func (b *branchNode[K, V]) get(hash uint64, key K, tx *Tx[K, V], depth int,
 	return value, false
 }
 
-func (b *branchNode[K, V]) delete(hash uint64, key K, tx *Tx[K, V], depth int,
+func (b *branchNode[K, V]) delete(hash uint64, key K, txid uintptr, depth int,
 ) (value V, deleted bool) {
 	i := (hash >> (depth << hshift)) & (nnodes - 1)
 	kind := b.states[i].kind.Load()
 	if kind == kindBranch || kind == kindLeafSplit {
 		if kind == kindLeafSplit {
 			if validateState {
-				if b.states[i].tx != tx {
+				if b.states[i].txid != txid {
 					panic("invalid state")
 				}
 				if b.states[i].lock.TryLock() {
@@ -300,10 +305,10 @@ func (b *branchNode[K, V]) delete(hash uint64, key K, tx *Tx[K, V], depth int,
 			}
 		}
 		child := (*branchNode[K, V])(b.nodes[i])
-		return child.delete(hash, key, tx, depth+1)
+		return child.delete(hash, key, txid, depth+1)
 	}
 	if validateState {
-		if b.states[i].tx != tx {
+		if b.states[i].txid != txid {
 			panic("invalid state")
 		}
 		if b.states[i].lock.TryLock() {
@@ -334,20 +339,34 @@ func (tx *Tx[K, V]) validate(hash uint64) error {
 	if tx.ended {
 		return ErrTxEnded
 	}
-	if !slices.Contains(tx.hashes, hash) {
-		return ErrNotCovered
+	if tx.withonehash {
+		if tx.onehash != hash {
+			return ErrNotCovered
+		}
+	} else {
+		if !slices.Contains(tx.hashes0, hash) {
+			return ErrNotCovered
+		}
 	}
 	return nil
 }
 
-func (m *Map[K, V]) Begin(keys ...K) *Tx[K, V] {
-	tx := &Tx[K, V]{m: m, hashes: make([]uint64, len(keys))}
-	for i, key := range keys {
-		tx.hashes[i] = hashkey(key)
-	}
-	slices.Sort(tx.hashes)
-	for _, hash := range tx.hashes {
-		tx.m.root.lock(hash, tx, 0)
+func (m *Map[K, V]) Begin(keys ...K) Tx[K, V] {
+	tx := Tx[K, V]{m: m}
+	tx.id = txidc.Add(1)
+	if len(keys) == 1 {
+		tx.withonehash = true
+		tx.onehash = hashkey(keys[0])
+		tx.m.root.lock(tx.onehash, tx.id, 0)
+	} else {
+		tx.hashes0 = make([]uint64, len(keys))
+		for i, key := range keys {
+			tx.hashes0[i] = hashkey(key)
+		}
+		slices.Sort(tx.hashes0)
+		for _, hash := range tx.hashes0 {
+			tx.m.root.lock(hash, tx.id, 0)
+		}
 	}
 	return tx
 }
@@ -357,7 +376,7 @@ func (tx *Tx[K, V]) Set(key K, value V) (old V, replaced bool, err error) {
 	if err := tx.validate(hash); err != nil {
 		return old, false, err
 	}
-	old, replaced = tx.m.root.set(item[K, V]{hash, key, value}, tx, false, 0)
+	old, replaced = tx.m.root.set(item[K, V]{hash, key, value}, tx.id, false, 0)
 	return old, replaced, nil
 }
 
@@ -366,7 +385,7 @@ func (tx *Tx[K, V]) Get(key K) (value V, found bool, err error) {
 	if err := tx.validate(hash); err != nil {
 		return value, false, err
 	}
-	value, found = tx.m.root.get(hash, key, tx, 0)
+	value, found = tx.m.root.get(hash, key, tx.id, 0)
 	return value, found, nil
 }
 
@@ -375,7 +394,7 @@ func (tx *Tx[K, V]) Delete(key K) (value V, deleted bool, err error) {
 	if err := tx.validate(hash); err != nil {
 		return value, false, err
 	}
-	value, deleted = tx.m.root.delete(hash, key, tx, 0)
+	value, deleted = tx.m.root.delete(hash, key, tx.id, 0)
 	return value, deleted, nil
 }
 
@@ -383,8 +402,12 @@ func (tx *Tx[K, V]) End() error {
 	if tx.ended {
 		return ErrTxEnded
 	}
-	for _, hash := range tx.hashes {
-		tx.m.root.unlock(hash, tx, 0)
+	if tx.withonehash {
+		tx.m.root.unlock(tx.onehash, tx.id, 0)
+	} else {
+		for _, hash := range tx.hashes0 {
+			tx.m.root.unlock(hash, tx.id, 0)
+		}
 	}
 	tx.ended = true
 	return nil

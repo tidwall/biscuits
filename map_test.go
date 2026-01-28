@@ -396,7 +396,7 @@ func (b *branchNode[K, V]) sane(print bool, hash uint64, depth int) {
 				fmt.Printf("\n")
 			}
 			if validateState {
-				if b.states[i].tx != nil {
+				if b.states[i].txid != 0 {
 					panic("invalid state")
 				}
 			}
