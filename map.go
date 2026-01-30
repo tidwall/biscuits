@@ -705,6 +705,13 @@ func (m *Map[K, V]) Set(key K, value V) (prev V, replaced bool) {
 		}
 		// Not found, insert new
 		leaf.items = append(leaf.items, item[K, V]{hash, key, value})
+		if len(leaf.items) >= mitems {
+			// Split leaf. Convert to branch
+			branch2 := new(branchNode[K, V])
+			branch2.setAfterSplit(depth+1, leaf)
+			b.nodes[i] = unsafe.Pointer(branch2)
+			b.states[i].kind.Store(kindBranch)
+		}
 		b.states[i].lock.Unlock()
 		return prev, false
 	}
