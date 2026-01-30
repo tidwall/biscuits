@@ -497,7 +497,13 @@ func (m *Map[K, V]) Action(key K, action func(found bool, val V) (V, Action)) {
 	var depth int
 	for {
 		i := (hash >> (depth << hshift)) & (nnodes - 1)
-		kind := b.states[i].kind.Load()
+		kind := *(*int32)(unsafe.Pointer(&b.states[i].kind)) //.Load()
+		if kind == kindBranch {
+			b = (*branchNode[K, V])(b.nodes[i])
+			depth++
+			continue
+		}
+		kind = b.states[i].kind.Load()
 		if kind >= 4 {
 			b.cow(int(i), m.validate)
 			runtime.Gosched()
@@ -545,7 +551,6 @@ func (m *Map[K, V]) Action(key K, action func(found bool, val V) (V, Action)) {
 			val := leaf.items[j].value
 			val, act := action(true, val)
 			switch act {
-			case NoChange:
 			case Set:
 				// Replace item
 				leaf.items[j] = item[K, V]{hash, key, val}
