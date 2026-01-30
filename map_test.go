@@ -399,7 +399,7 @@ func TestPerfIntKeys(t *testing.T) {
 		testPerfSyncMapIntKeys(N, t)
 	}
 
-	println("== PERF biscuits.Map int keys ==")
+	println("== PERF biscuits.Map int keys (Tx) ==")
 	for t := t0; t <= t1; t++ {
 		testPerfBiscuitsMapIntKeys(N, t)
 	}
