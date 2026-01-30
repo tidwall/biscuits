@@ -123,6 +123,55 @@ func TestMapIntKeys(t *testing.T) {
 	m.sane(false)
 }
 
+func TestActionIntKeys(t *testing.T) {
+	println("== TEST int keys (Action) ==")
+	N := 10000000
+	T := runtime.GOMAXPROCS(0)
+	var m Map[int, int]
+	m.validate = true
+	lotsa.Output = os.Stdout
+	print("set    ")
+	lotsa.Ops(N, T, func(i, t int) {
+		m.Action(i, func(found bool, value int) (int, Action) {
+			if found {
+				panic("!bad news")
+			}
+			return i, Set
+		})
+	})
+	m.sane(false)
+	print("get    ")
+	lotsa.Ops(N, T, func(i, t int) {
+		m.Action(i, func(found bool, value int) (int, Action) {
+			if !found || value != i {
+				panic("!bad news")
+			}
+			return i, NoChange
+		})
+	})
+	m.sane(false)
+	print("delete ")
+	lotsa.Ops(N, T, func(i, t int) {
+		m.Action(i, func(found bool, value int) (int, Action) {
+			if !found || value != i {
+				panic("!bad news")
+			}
+			return i, Delete
+		})
+	})
+	m.sane(false)
+	for i := range N {
+		m.Action(i, func(found bool, value int) (int, Action) {
+			if found || value != 0 {
+				panic("!bad news")
+			}
+			return i, NoChange
+		})
+	}
+	m.sane(false)
+
+}
+
 func TestClone(t *testing.T) {
 	N := 1000000
 	T := runtime.GOMAXPROCS(0)
@@ -222,7 +271,7 @@ func testPerfSyncMapStringKeys(N, T int) {
 	}
 	var m sync.Map
 	lotsa.Output = os.Stdout
-	print("insert ")
+	print("store  ")
 	lotsa.Ops(N, T, func(i, t int) {
 		m.Store(keys[i], i)
 	})
@@ -238,7 +287,7 @@ func testPerfBiscuitsMapStringKeys(N, T int) {
 	}
 	var m Map[string, int]
 	lotsa.Output = os.Stdout
-	print("insert ")
+	print("set    ")
 	lotsa.Ops(N, T, func(i, t int) {
 		tx := m.Begin(keys[i])
 		tx.Set(keys[i], i)
@@ -247,7 +296,6 @@ func testPerfBiscuitsMapStringKeys(N, T int) {
 	m.Scan(func(key string, value int) bool {
 		return true
 	})
-
 }
 
 func testPerfSyncMapIntKeys(N, T int) {
@@ -257,15 +305,16 @@ func testPerfSyncMapIntKeys(N, T int) {
 	}
 	var m sync.Map
 	lotsa.Output = os.Stdout
-	print("insert ")
+	print("store  ")
 	lotsa.Ops(N, T, func(i, t int) {
 		m.Store(keys[i], i)
 	})
-	m.Range(func(key, value any) bool {
-		return true
+	print("load   ")
+	lotsa.Ops(N, T, func(i, t int) {
+		m.Load(keys[i])
 	})
-
 }
+
 func testPerfBiscuitsMapIntKeys(N, T int) {
 	keys := make([]int, N)
 	for i := range keys {
@@ -274,14 +323,40 @@ func testPerfBiscuitsMapIntKeys(N, T int) {
 	}
 	var m Map[int, int]
 	lotsa.Output = os.Stdout
-	print("insert ")
+	print("set    ")
 	lotsa.Ops(N, T, func(i, t int) {
 		tx := m.Begin(keys[i])
 		tx.Set(keys[i], i)
 		tx.End()
 	})
-	m.Scan(func(key int, value int) bool {
-		return true
+	print("get    ")
+	lotsa.Ops(N, T, func(i, t int) {
+		tx := m.Begin(keys[i])
+		tx.Get(keys[i])
+		tx.End()
+	})
+
+}
+
+func testPerfBiscuitsActionIntKeys(N, T int) {
+	keys := make([]int, N)
+	for i := range keys {
+		keys[i] = i
+
+	}
+	var m Map[int, int]
+	lotsa.Output = os.Stdout
+	print("set    ")
+	lotsa.Ops(N, T, func(i, t int) {
+		m.Action(keys[i], func(found bool, value int) (int, Action) {
+			return i, Set
+		})
+	})
+	print("get    ")
+	lotsa.Ops(N, T, func(i, t int) {
+		m.Action(keys[i], func(found bool, value int) (int, Action) {
+			return 0, NoChange
+		})
 	})
 
 }
@@ -301,7 +376,7 @@ func TestPerfStringKeys(t *testing.T) {
 }
 func TestPerfIntKeys(t *testing.T) {
 	println("== PERF sync.Map int keys ==")
-	N := 2500000
+	N := 5000000
 	for t := 1; t <= runtime.GOMAXPROCS(0); t++ {
 		testPerfSyncMapIntKeys(N, t)
 	}
@@ -311,6 +386,10 @@ func TestPerfIntKeys(t *testing.T) {
 		testPerfBiscuitsMapIntKeys(N, t)
 	}
 
+	println("== PERF biscuits.Map int keys (Action) ==")
+	for t := 1; t <= runtime.GOMAXPROCS(0); t++ {
+		testPerfBiscuitsActionIntKeys(N, t)
+	}
 }
 
 func TestExample1(t *testing.T) {
@@ -366,6 +445,31 @@ func TestExample2(t *testing.T) {
 	// Output:
 	// Tom
 	// Janet
+}
+
+func TestExample3(t *testing.T) {
+	var m Map[string, string]
+
+	// Store user 512/Tom
+	m.Action("512", func(found bool, value string) (string, Action) {
+		return "Tom", Set
+	})
+
+	// Get user
+	m.Action("512", func(found bool, value string) (string, Action) {
+		if found {
+			println(value)
+		}
+		return value, NoChange
+	})
+
+	// Delete user
+	m.Action("512", func(found bool, value string) (string, Action) {
+		return "", Delete
+	})
+
+	// Output:
+	// Tom
 }
 
 func (b *branchNode[K, V]) sane(print bool, hash uint64, depth int,

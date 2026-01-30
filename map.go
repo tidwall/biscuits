@@ -14,9 +14,9 @@ import (
 	"github.com/cespare/xxhash/v2"
 )
 
-const maxItems = 32 // max items per leaf before splitting
-const nnodes = 16   // (nnodes, hshift) work together and must be one of
-const hshift = 2    // the following: (2, 1) or (16, 2) or (256, 3)
+const mitems = 8   // max items per leaf before splitting
+const nnodes = 256 // (nnodes, hshift) work together and must be one of
+const hshift = 3   // the following: (2, 1) or (16, 2) or (256, 3)
 
 var (
 	ErrNotCovered = errors.New("key not covered")
@@ -250,12 +250,12 @@ func (b *branchNode[K, V]) set(item item[K, V], txid uint64, split bool,
 		}
 	}
 	leaf.items = append(leaf.items, item)
-	if !split && len(leaf.items) >= maxItems {
+	if !split && len(leaf.items) >= mitems {
 		// Split leaf. Convert to branch
 		branch2 := new(branchNode[K, V])
+		branch2.setAfterSplit(depth+1, leaf)
 		b.states[i].kind.Store(kindLeafSplit)
 		b.nodes[i] = unsafe.Pointer(branch2)
-		branch2.setAfterSplit(depth+1, leaf)
 	}
 	return old, false
 }
@@ -478,4 +478,103 @@ func (b *branchNode[K, V]) scan(iter func(key K, value V) bool, validate bool,
 // sync.RWLock.
 func (m *Map[K, V]) Scan(iter func(key K, value V) bool) {
 	m.root.scan(iter, m.validate)
+}
+
+type Action int
+
+const (
+	NoChange Action = iota
+	Set
+	Delete
+)
+
+// Action performs a direct action on a key.
+// This is the fastest way to access or modify a key, and is available as
+// an alternative to using a transaction for single key operations.
+func (m *Map[K, V]) Action(key K, action func(found bool, val V) (V, Action)) {
+	hash := hashkey(key)
+	b := &m.root
+	var depth int
+	for {
+		i := (hash >> (depth << hshift)) & (nnodes - 1)
+		kind := b.states[i].kind.Load()
+		if kind >= 4 {
+			b.cow(int(i), m.validate)
+			runtime.Gosched()
+			continue
+		}
+		if kind == kindBranch {
+			b = (*branchNode[K, V])(b.nodes[i])
+			depth++
+			continue
+		}
+		b.states[i].lock.Lock()
+		kind = b.states[i].kind.Load()
+		if kind != kindLeaf {
+			if m.validate {
+				if kind == kindLeafSplit {
+					panic("invalid state")
+				}
+			}
+			b.states[i].lock.Unlock()
+			continue
+		}
+		if m.validate {
+			if b.states[i].txid != 0 {
+				panic("invalid state")
+			}
+		}
+		leaf := (*leafNode[K, V])(b.nodes[i])
+		if leaf == nil {
+			// Not found
+			var val V
+			val, act := action(false, val)
+			if act == Set {
+				leaf = new(leafNode[K, V])
+				b.nodes[i] = unsafe.Pointer(leaf)
+				leaf.items = append(leaf.items, item[K, V]{hash, key, val})
+			}
+			b.states[i].lock.Unlock()
+			return
+		}
+		for j := range leaf.items {
+			if leaf.items[j].hash != hash || leaf.items[j].key != key {
+				continue
+			}
+			// Found existing item
+			val := leaf.items[j].value
+			val, act := action(true, val)
+			switch act {
+			case Set:
+				// Replace item
+				leaf.items[j] = item[K, V]{hash, key, val}
+			case Delete:
+				// Delete item
+				var empty item[K, V]
+				leaf.items[j] = leaf.items[len(leaf.items)-1]
+				leaf.items[len(leaf.items)-1] = empty
+				leaf.items = leaf.items[:len(leaf.items)-1]
+				if len(leaf.items) == 0 {
+					b.nodes[i] = nil
+				}
+			}
+			b.states[i].lock.Unlock()
+			return
+		}
+		// Not found
+		var val V
+		val, act := action(false, val)
+		if act == Set {
+			leaf.items = append(leaf.items, item[K, V]{hash, key, val})
+			if len(leaf.items) >= mitems {
+				// Split leaf. Convert to branch
+				branch2 := new(branchNode[K, V])
+				branch2.setAfterSplit(depth+1, leaf)
+				b.nodes[i] = unsafe.Pointer(branch2)
+				b.states[i].kind.Store(kindBranch)
+			}
+		}
+		b.states[i].lock.Unlock()
+		return
+	}
 }
