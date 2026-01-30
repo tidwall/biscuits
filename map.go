@@ -14,9 +14,9 @@ import (
 	"github.com/cespare/xxhash/v2"
 )
 
-const mitems = 32  // max items per leaf before splitting
-const nnodes = 256 // (nnodes, hshift) work together and must be one of
-const hshift = 3   // the following: (2, 1) or (16, 2) or (256, 3)
+const mitems = 32 // max items per leaf before splitting
+const nnodes = 16 // (nnodes, hshift) work together and must be one of
+const hshift = 2  // the following: (2, 1) or (16, 2) or (256, 3)
 
 var (
 	ErrNotCovered = errors.New("key not covered")
