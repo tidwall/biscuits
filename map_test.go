@@ -377,17 +377,17 @@ func TestPerfStringKeys(t *testing.T) {
 func TestPerfIntKeys(t *testing.T) {
 	println("== PERF sync.Map int keys ==")
 	N := 5000000
-	for t := 1; t <= runtime.GOMAXPROCS(0); t++ {
+	for t := runtime.GOMAXPROCS(0); t <= runtime.GOMAXPROCS(0); t++ {
 		testPerfSyncMapIntKeys(N, t)
 	}
 
-	println("== PERF biscuits.Map int keys ==")
-	for t := 1; t <= runtime.GOMAXPROCS(0); t++ {
-		testPerfBiscuitsMapIntKeys(N, t)
-	}
+	// println("== PERF biscuits.Map int keys ==")
+	// for t := 1; t <= runtime.GOMAXPROCS(0); t++ {
+	// 	testPerfBiscuitsMapIntKeys(N, t)
+	// }
 
 	println("== PERF biscuits.Map int keys (Action) ==")
-	for t := 1; t <= runtime.GOMAXPROCS(0); t++ {
+	for t := runtime.GOMAXPROCS(0); t <= runtime.GOMAXPROCS(0); t++ {
 		testPerfBiscuitsActionIntKeys(N, t)
 	}
 }
