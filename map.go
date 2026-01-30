@@ -197,14 +197,15 @@ func (b *branchNode[K, V]) unlock(hash uint64, txid uint64, depth int,
 
 func (b *branchNode[K, V]) setAfterSplit(depth int, leaf *leafNode[K, V]) {
 	for j := 0; j < len(leaf.items); j++ {
-		item := leaf.items[j]
-		i := (item.hash >> (depth << hshift)) & (nnodes - 1)
+		itm := leaf.items[j]
+		i := (itm.hash >> (depth << hshift)) & (nnodes - 1)
 		leaf := (*leafNode[K, V])(b.nodes[i])
 		if leaf == nil {
 			leaf = new(leafNode[K, V])
+			leaf.items = make([]item[K, V], 0, mitems+1)
 			b.nodes[i] = unsafe.Pointer(leaf)
 		}
-		leaf.items = append(leaf.items, item)
+		leaf.items = append(leaf.items, itm)
 	}
 }
 
