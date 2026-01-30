@@ -531,7 +531,7 @@ func (m *Map[K, V]) Action(key K, action func(found bool, val V) (V, Action)) {
 			val, act := action(false, val)
 			if act == Set {
 				leaf = new(leafNode[K, V])
-				leaf.items = make([]item[K, V], mitems+1)
+				leaf.items = make([]item[K, V], 0, mitems+1)
 				b.nodes[i] = unsafe.Pointer(leaf)
 				leaf.items = append(leaf.items, item[K, V]{hash, key, val})
 			}
