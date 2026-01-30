@@ -69,7 +69,7 @@ tx.End()
 // Janet
 ```
 
-Performs direct actions on a key.
+Perform direct actions on a key.
 This is the fastest way to access or modify a key and is available as
 an alternative to using a transaction for single key operations.
 
@@ -102,7 +102,7 @@ m.Action("512", func(found bool, value string) (string, biscuits.Action) {
 
 The following benchmarks compare `biscuits.Map[int, int]` to the built in `sync.Map[int, int]`. 
 
-Benchmarking 5,000,000 integer keys over 10 threads.
+Benchmarking 5,000,000 integer keys over 16 threads.
 
 Linux, AMD Ryzen 9 5950X 16-Core processor, Go 1.26
 Command: `go test -run Perf`
