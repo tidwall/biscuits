@@ -392,8 +392,8 @@ func TestPerfStringKeys(t *testing.T) {
 func TestPerfIntKeys(t *testing.T) {
 	println("== PERF sync.Map int keys ==")
 	N := 5000000
-	t0 := 16 // 0
-	t1 := 16 // runtime.GOMAXPROCS(0)
+	t0 := 0
+	t1 := runtime.GOMAXPROCS(0)
 	for t := t0; t <= t1; t++ {
 		testPerfSyncMapIntKeys(N, t)
 	}
