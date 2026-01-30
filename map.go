@@ -545,6 +545,7 @@ func (m *Map[K, V]) Action(key K, action func(found bool, val V) (V, Action)) {
 			val := leaf.items[j].value
 			val, act := action(true, val)
 			switch act {
+			case NoChange:
 			case Set:
 				// Replace item
 				leaf.items[j] = item[K, V]{hash, key, val}
