@@ -305,13 +305,17 @@ func testPerfSyncMapIntKeys(N, T int) {
 	}
 	var m sync.Map
 	lotsa.Output = os.Stdout
-	print("store  ")
+	print("store    ")
 	lotsa.Ops(N, T, func(i, t int) {
 		m.Store(keys[i], i)
 	})
-	print("load   ")
+	print("load     ")
 	lotsa.Ops(N, T, func(i, t int) {
 		m.Load(keys[i])
+	})
+	print("delete   ")
+	lotsa.Ops(N, T, func(i, t int) {
+		m.Delete(keys[i])
 	})
 }
 
@@ -323,16 +327,22 @@ func testPerfBiscuitsMapIntKeys(N, T int) {
 	}
 	var m Map[int, int]
 	lotsa.Output = os.Stdout
-	print("set    ")
+	print("set      ")
 	lotsa.Ops(N, T, func(i, t int) {
 		tx := m.Begin(keys[i])
 		tx.Set(keys[i], i)
 		tx.End()
 	})
-	print("get    ")
+	print("get      ")
 	lotsa.Ops(N, T, func(i, t int) {
 		tx := m.Begin(keys[i])
 		tx.Get(keys[i])
+		tx.End()
+	})
+	print("delete   ")
+	lotsa.Ops(N, T, func(i, t int) {
+		tx := m.Begin(keys[i])
+		tx.Delete(keys[i])
 		tx.End()
 	})
 
@@ -346,16 +356,22 @@ func testPerfBiscuitsActionIntKeys(N, T int) {
 	}
 	var m Map[int, int]
 	lotsa.Output = os.Stdout
-	print("set    ")
+	print("set      ")
 	lotsa.Ops(N, T, func(i, t int) {
 		m.Action(keys[i], func(found bool, value int) (int, Action) {
 			return i, Set
 		})
 	})
-	print("get    ")
+	print("get      ")
 	lotsa.Ops(N, T, func(i, t int) {
 		m.Action(keys[i], func(found bool, value int) (int, Action) {
 			return 0, NoChange
+		})
+	})
+	print("delete   ")
+	lotsa.Ops(N, T, func(i, t int) {
+		m.Action(keys[i], func(found bool, value int) (int, Action) {
+			return 0, Delete
 		})
 	})
 
@@ -383,10 +399,10 @@ func TestPerfIntKeys(t *testing.T) {
 		testPerfSyncMapIntKeys(N, t)
 	}
 
-	// println("== PERF biscuits.Map int keys ==")
-	// for t := 1; t <= runtime.GOMAXPROCS(0); t++ {
-	// 	testPerfBiscuitsMapIntKeys(N, t)
-	// }
+	println("== PERF biscuits.Map int keys ==")
+	for t := t0; t <= t1; t++ {
+		testPerfBiscuitsMapIntKeys(N, t)
+	}
 
 	println("== PERF biscuits.Map int keys (Action) ==")
 	for t := t0; t <= t1; t++ {
