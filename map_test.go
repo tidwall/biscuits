@@ -319,7 +319,7 @@ func testPerfSyncMapIntKeys(N, T int) {
 	})
 }
 
-func testPerfBiscuitsMapIntKeys(N, T int) {
+func testPerfBiscuitsTxIntKeys(N, T int) {
 	keys := make([]int, N)
 	for i := range keys {
 		keys[i] = i
@@ -344,6 +344,28 @@ func testPerfBiscuitsMapIntKeys(N, T int) {
 		tx := m.Begin(keys[i])
 		tx.Delete(keys[i])
 		tx.End()
+	})
+
+}
+func testPerfBiscuitsMapIntKeys(N, T int) {
+	keys := make([]int, N)
+	for i := range keys {
+		keys[i] = i
+
+	}
+	var m Map[int, int]
+	lotsa.Output = os.Stdout
+	print("set      ")
+	lotsa.Ops(N, T, func(i, t int) {
+		m.Set(keys[i], i)
+	})
+	print("get      ")
+	lotsa.Ops(N, T, func(i, t int) {
+		m.Get(keys[i])
+	})
+	print("delete   ")
+	lotsa.Ops(N, T, func(i, t int) {
+		m.Delete(keys[i])
 	})
 
 }
@@ -399,15 +421,21 @@ func TestPerfIntKeys(t *testing.T) {
 		testPerfSyncMapIntKeys(N, t)
 	}
 
-	println("== PERF biscuits.Map int keys (Tx) ==")
+	println("== PERF biscuits.Map int keys ==")
 	for t := t0; t <= t1; t++ {
 		testPerfBiscuitsMapIntKeys(N, t)
+	}
+
+	println("== PERF biscuits.Map int keys (Tx) ==")
+	for t := t0; t <= t1; t++ {
+		testPerfBiscuitsTxIntKeys(N, t)
 	}
 
 	println("== PERF biscuits.Map int keys (Action) ==")
 	for t := t0; t <= t1; t++ {
 		testPerfBiscuitsActionIntKeys(N, t)
 	}
+
 }
 
 func TestExample1(t *testing.T) {
