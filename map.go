@@ -14,9 +14,9 @@ import (
 	"github.com/cespare/xxhash/v2"
 )
 
-const mitems = 32  // max items per leaf before splitting
-const nnodes = 256 // (nnodes, hshift) work together and must be one of
-const hshift = 3   // the following: (2, 1) or (16, 2) or (256, 3)
+const mitems = 16 // max items per leaf before splitting
+const nnodes = 16 // (nnodes, hshift) work together and must be one of
+const hshift = 2  // the following: (2, 1) or (16, 2) or (256, 3)
 
 var (
 	ErrNotCovered = errors.New("key not covered")
@@ -197,15 +197,14 @@ func (b *branchNode[K, V]) unlock(hash uint64, txid uint64, depth int,
 
 func (b *branchNode[K, V]) setAfterSplit(depth int, leaf *leafNode[K, V]) {
 	for j := 0; j < len(leaf.items); j++ {
-		itm := leaf.items[j]
-		i := (itm.hash >> (depth << hshift)) & (nnodes - 1)
+		item := leaf.items[j]
+		i := (item.hash >> (depth << hshift)) & (nnodes - 1)
 		leaf := (*leafNode[K, V])(b.nodes[i])
 		if leaf == nil {
 			leaf = new(leafNode[K, V])
-			leaf.items = make([]item[K, V], 0, mitems+1)
 			b.nodes[i] = unsafe.Pointer(leaf)
 		}
-		leaf.items = append(leaf.items, itm)
+		leaf.items = append(leaf.items, item)
 	}
 }
 
@@ -532,7 +531,6 @@ func (m *Map[K, V]) Action(key K, action func(found bool, val V) (V, Action)) {
 			val, act := action(false, val)
 			if act == Set {
 				leaf = new(leafNode[K, V])
-				leaf.items = make([]item[K, V], 0, mitems+1)
 				b.nodes[i] = unsafe.Pointer(leaf)
 				leaf.items = append(leaf.items, item[K, V]{hash, key, val})
 			}
