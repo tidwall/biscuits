@@ -4,7 +4,7 @@ Fast concurrent hashmap for rapidly changing keys.
 
 - Designed for high concurrency and low contention
 - Uses a 2PL type locking mechanism
-- Works with string keys
+- Works with string and integer keys
 - Built with a trie structure under the hood
 - O(1) Copy-on-write method
 
