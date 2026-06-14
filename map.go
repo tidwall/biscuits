@@ -4,14 +4,13 @@
 package biscuits
 
 import (
+	"encoding/binary"
 	"errors"
 	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
 	"unsafe"
-
-	"github.com/cespare/xxhash/v2"
 )
 
 const mitems = 16 // max items per leaf before splitting
@@ -19,9 +18,10 @@ const nnodes = 16 // (nnodes, hshift) work together and must be one of
 const hshift = 2  // the following: (2, 1) or (16, 2) or (256, 3)
 
 var (
-	ErrNotCovered = errors.New("key not covered")
-	ErrTxEnded    = errors.New("transaction ended")
-	ErrNotFound   = errors.New("not found")
+	ErrNotCovered  = errors.New("key not covered")
+	ErrTxEnded     = errors.New("transaction ended")
+	ErrNotFound    = errors.New("not found")
+	ErrNotWritable = errors.New("not writable")
 )
 
 type keytype interface {
@@ -38,19 +38,12 @@ const (
 	kindClonedLocked = 16 // bit 4
 )
 
-var txidc atomic.Uint64
-
-func nextTxID() uint64 {
-	return txidc.Add(1)
-}
-
 type Tx[K keytype, V any] struct {
-	id          uint64
-	withonehash bool
-	onehash     uint64
-	hashes0     []uint64
-	ended       bool
-	m           *Map[K, V]
+	id     uint64
+	write  bool
+	hashes []uint64
+	ended  bool
+	m      *Map[K, V]
 }
 
 type item[K keytype, V any] struct {
@@ -64,9 +57,25 @@ type leafNode[K keytype, V any] struct {
 }
 
 type state[K keytype, V any] struct {
-	kind atomic.Int32
-	txid uint64
-	lock sync.Mutex
+	kind  atomic.Int32
+	txid  uint64
+	mutex sync.RWMutex // leaf only
+}
+
+func (s *state[K, V]) unlock(write bool) {
+	if write {
+		s.mutex.Unlock()
+	} else {
+		s.mutex.RUnlock()
+	}
+}
+
+func (s *state[K, V]) lock(write bool) {
+	if write {
+		s.mutex.Lock()
+	} else {
+		s.mutex.RLock()
+	}
 }
 
 type branchNode[K keytype, V any] struct {
@@ -75,15 +84,39 @@ type branchNode[K keytype, V any] struct {
 }
 
 type Map[K keytype, V any] struct {
-	validate bool             // validate structure state (testing only)
-	root     branchNode[K, V] // root branch
+	root branchNode[K, V] // root branch
+}
+
+// https://github.com/tidwall/th64
+func th64(data []byte, seed uint64) uint64 {
+	p := data
+	r := uint64(0x14020a57acced8b7)
+	h := seed
+	for len(p) >= 8 {
+		x := binary.LittleEndian.Uint64(p) * r
+		h = h*r ^ (x<<31 | x>>33)
+		h = h<<31 | h>>33
+		p = p[8:]
+	}
+	for _, b := range p {
+		h = h*r ^ uint64(b)
+	}
+	h = h*r + uint64(len(data))
+	h ^= h >> 31
+	h *= r
+	h ^= h >> 31
+	h *= r
+	h ^= h >> 31
+	h *= r
+	return h
 }
 
 func hashkey[K keytype](key K) uint64 {
 	var num uint64
 	switch key := any(key).(type) {
 	case string:
-		return xxhash.Sum64String(key)
+		data := unsafe.Slice(unsafe.StringData(key), len(key))
+		return th64(data, 0)
 	case int64:
 		num = uint64(key)
 	case uint64:
@@ -93,10 +126,11 @@ func hashkey[K keytype](key K) uint64 {
 	case uint:
 		num = uint64(key)
 	}
-	return xxhash.Sum64(unsafe.Slice((*byte)(unsafe.Pointer(&num)), 8))
+	data := unsafe.Slice((*byte)(unsafe.Pointer(&num)), 8)
+	return th64(data, 0)
 }
 
-func (b *branchNode[K, V]) cow(i int, validate bool) {
+func (b *branchNode[K, V]) cow(i int) {
 	// clone bit flag set
 	kind := b.states[i].kind.Load()
 	if kind < 4 {
@@ -105,11 +139,6 @@ func (b *branchNode[K, V]) cow(i int, validate bool) {
 	if kind&kindClonedLocked == kindClonedLocked {
 		// Already in the process of being cloned
 		return
-	}
-	if validate {
-		if kind&kindCloned != kindCloned {
-			panic("invalid state")
-		}
 	}
 	if !b.states[i].kind.CompareAndSwap(kind, kind|kindClonedLocked) {
 		return
@@ -135,64 +164,44 @@ func (b *branchNode[K, V]) cow(i int, validate bool) {
 	b.states[i].kind.Store(kind)
 }
 
-func (b *branchNode[K, V]) lock(hash uint64, txid uint64, depth int,
-	validate bool,
+func (b *branchNode[K, V]) lock(write bool, hash uint64, txid uint64, depth int,
 ) {
 	i := (hash >> (depth << hshift)) & (nnodes - 1)
 	for {
 		kind := b.states[i].kind.Load()
 		if kind >= 4 {
-			b.cow(int(i), validate)
+			b.cow(int(i))
 			runtime.Gosched()
 			continue
 		}
 		if kind == kindBranch {
-			(*branchNode[K, V])(b.nodes[i]).lock(hash, txid, depth+1, validate)
+			(*branchNode[K, V])(b.nodes[i]).lock(write, hash, txid, depth+1)
 			break
 		}
-		b.states[i].lock.Lock()
+		b.states[i].lock(write)
 		kind = b.states[i].kind.Load()
 		if kind == kindLeaf {
-			if validate {
-				if b.states[i].txid != 0 {
-					panic("invalid state")
-				}
-				b.states[i].txid = txid
-			}
 			break
 		}
-		if validate {
-			if kind == kindLeafSplit {
-				panic("invalid state")
-			}
-		}
-		b.states[i].lock.Unlock()
+		b.states[i].unlock(write)
 	}
 }
 
-func (b *branchNode[K, V]) unlock(hash uint64, txid uint64, depth int,
-	validate bool,
+func (b *branchNode[K, V]) unlock(write bool, hash uint64, txid uint64,
+	depth int,
 ) {
 	i := (hash >> (depth << hshift)) & (nnodes - 1)
 	kind := b.states[i].kind.Load()
 	if kind == kindBranch {
-		(*branchNode[K, V])(b.nodes[i]).unlock(hash, txid, depth+1, validate)
+		(*branchNode[K, V])(b.nodes[i]).unlock(write, hash, txid, depth+1)
 		return
-	}
-	if validate {
-		if b.states[i].txid != txid {
-			panic("invalid state")
-		}
 	}
 	if kind == kindLeafSplit {
 		// Leaf was converted to branch due to a split.
 		// Switch to a branch before unlocking
 		b.states[i].kind.Store(kindBranch)
 	}
-	if validate {
-		b.states[i].txid = 0
-	}
-	b.states[i].lock.Unlock()
+	b.states[i].unlock(write)
 }
 
 func (b *branchNode[K, V]) setAfterSplit(depth int, leaf *leafNode[K, V]) {
@@ -209,33 +218,14 @@ func (b *branchNode[K, V]) setAfterSplit(depth int, leaf *leafNode[K, V]) {
 }
 
 func (b *branchNode[K, V]) set(item item[K, V], txid uint64, split bool,
-	depth int, validate bool,
+	depth int,
 ) (old V, replaced bool) {
 	i := (item.hash >> (depth << hshift)) & (nnodes - 1)
 	kind := b.states[i].kind.Load()
 	if kind == kindBranch || kind == kindLeafSplit {
-		var split2 bool
-		if kind == kindLeafSplit {
-			if validate {
-				if b.states[i].txid != txid {
-					panic("invalid state")
-				}
-				if b.states[i].lock.TryLock() {
-					panic("invalid state")
-				}
-			}
-			split2 = true
-		}
+		split2 := kind == kindLeafSplit
 		child := (*branchNode[K, V])(b.nodes[i])
-		return child.set(item, txid, split2, depth+1, validate)
-	}
-	if validate {
-		if b.states[i].txid != txid {
-			panic("invalid state")
-		}
-		if b.states[i].lock.TryLock() {
-			panic("invalid state")
-		}
+		return child.set(item, txid, split2, depth+1)
 	}
 	leaf := (*leafNode[K, V])(b.nodes[i])
 	if leaf == nil {
@@ -261,31 +251,12 @@ func (b *branchNode[K, V]) set(item item[K, V], txid uint64, split bool,
 }
 
 func (b *branchNode[K, V]) get(hash uint64, key K, txid uint64, depth int,
-	validate bool,
 ) (value V, replaced bool) {
 	i := (hash >> (depth << hshift)) & (nnodes - 1)
 	kind := b.states[i].kind.Load()
 	if kind == kindBranch || kind == kindLeafSplit {
-		if kind == kindLeafSplit {
-			if validate {
-				if b.states[i].txid != txid {
-					panic("invalid state")
-				}
-				if b.states[i].lock.TryLock() {
-					panic("invalid state")
-				}
-			}
-		}
 		child := (*branchNode[K, V])(b.nodes[i])
-		return child.get(hash, key, txid, depth+1, validate)
-	}
-	if validate {
-		if b.states[i].txid != txid {
-			panic("invalid state")
-		}
-		if b.states[i].lock.TryLock() {
-			panic("invalid state")
-		}
+		return child.get(hash, key, txid, depth+1)
 	}
 	leaf := (*leafNode[K, V])(b.nodes[i])
 	if leaf != nil {
@@ -299,31 +270,12 @@ func (b *branchNode[K, V]) get(hash uint64, key K, txid uint64, depth int,
 }
 
 func (b *branchNode[K, V]) delete(hash uint64, key K, txid uint64, depth int,
-	validate bool,
 ) (value V, deleted bool) {
 	i := (hash >> (depth << hshift)) & (nnodes - 1)
 	kind := b.states[i].kind.Load()
 	if kind == kindBranch || kind == kindLeafSplit {
-		if kind == kindLeafSplit {
-			if validate {
-				if b.states[i].txid != txid {
-					panic("invalid state")
-				}
-				if b.states[i].lock.TryLock() {
-					panic("invalid state")
-				}
-			}
-		}
 		child := (*branchNode[K, V])(b.nodes[i])
-		return child.delete(hash, key, txid, depth+1, validate)
-	}
-	if validate {
-		if b.states[i].txid != txid {
-			panic("invalid state")
-		}
-		if b.states[i].lock.TryLock() {
-			panic("invalid state")
-		}
+		return child.delete(hash, key, txid, depth+1)
 	}
 	leaf := (*leafNode[K, V])(b.nodes[i])
 	if leaf == nil {
@@ -349,36 +301,23 @@ func (tx *Tx[K, V]) validate(hash uint64) error {
 	if tx.ended {
 		return ErrTxEnded
 	}
-	if tx.withonehash {
-		if tx.onehash != hash {
-			return ErrNotCovered
-		}
-	} else {
-		if !slices.Contains(tx.hashes0, hash) {
-			return ErrNotCovered
-		}
+	if !slices.Contains(tx.hashes, hash) {
+		return ErrNotCovered
 	}
 	return nil
 }
 
-func (m *Map[K, V]) Begin(keys ...K) Tx[K, V] {
-	tx := Tx[K, V]{m: m}
-	if m.validate {
-		tx.id = nextTxID()
+// Begin a transaction.
+// Use the write param to set the transaction to writable, otherwise read-only.
+func (m *Map[K, V]) Begin(write bool, keys ...K) Tx[K, V] {
+	tx := Tx[K, V]{m: m, write: true}
+	tx.hashes = make([]uint64, len(keys))
+	for i, key := range keys {
+		tx.hashes[i] = hashkey(key)
 	}
-	if len(keys) == 1 {
-		tx.withonehash = true
-		tx.onehash = hashkey(keys[0])
-		tx.m.root.lock(tx.onehash, tx.id, 0, tx.m.validate)
-	} else {
-		tx.hashes0 = make([]uint64, len(keys))
-		for i, key := range keys {
-			tx.hashes0[i] = hashkey(key)
-		}
-		slices.Sort(tx.hashes0)
-		for _, hash := range tx.hashes0 {
-			tx.m.root.lock(hash, tx.id, 0, tx.m.validate)
-		}
+	slices.Sort(tx.hashes)
+	for _, hash := range tx.hashes {
+		tx.m.root.lock(tx.write, hash, tx.id, 0)
 	}
 	return tx
 }
@@ -388,8 +327,10 @@ func (tx *Tx[K, V]) Set(key K, value V) (old V, replaced bool, err error) {
 	if err := tx.validate(hash); err != nil {
 		return old, false, err
 	}
-	old, replaced = tx.m.root.set(item[K, V]{hash, key, value}, tx.id, false, 0,
-		tx.m.validate)
+	if !tx.write {
+		return old, false, ErrNotWritable
+	}
+	old, replaced = tx.m.root.set(item[K, V]{hash, key, value}, tx.id, false, 0)
 	return old, replaced, nil
 }
 
@@ -398,7 +339,7 @@ func (tx *Tx[K, V]) Get(key K) (value V, found bool, err error) {
 	if err := tx.validate(hash); err != nil {
 		return value, false, err
 	}
-	value, found = tx.m.root.get(hash, key, tx.id, 0, tx.m.validate)
+	value, found = tx.m.root.get(hash, key, tx.id, 0)
 	return value, found, nil
 }
 
@@ -407,7 +348,10 @@ func (tx *Tx[K, V]) Delete(key K) (value V, deleted bool, err error) {
 	if err := tx.validate(hash); err != nil {
 		return value, false, err
 	}
-	value, deleted = tx.m.root.delete(hash, key, tx.id, 0, tx.m.validate)
+	if !tx.write {
+		return value, false, ErrNotWritable
+	}
+	value, deleted = tx.m.root.delete(hash, key, tx.id, 0)
 	return value, deleted, nil
 }
 
@@ -415,12 +359,8 @@ func (tx *Tx[K, V]) End() error {
 	if tx.ended {
 		return ErrTxEnded
 	}
-	if tx.withonehash {
-		tx.m.root.unlock(tx.onehash, tx.id, 0, tx.m.validate)
-	} else {
-		for _, hash := range tx.hashes0 {
-			tx.m.root.unlock(hash, tx.id, 0, tx.m.validate)
-		}
+	for _, hash := range tx.hashes {
+		tx.m.root.unlock(tx.write, hash, tx.id, 0)
 	}
 	tx.ended = true
 	return nil
@@ -434,7 +374,6 @@ func (tx *Tx[K, V]) End() error {
 // sync.RWLock.
 func (m *Map[K, V]) Clone() *Map[K, V] {
 	m2 := new(Map[K, V])
-	m2.validate = m.validate
 	for i := range m.root.nodes {
 		kind := m.root.states[i].kind.Load()
 		m.root.states[i].kind.Store(kind | kindCloned)
@@ -444,20 +383,14 @@ func (m *Map[K, V]) Clone() *Map[K, V] {
 	return m2
 }
 
-func (b *branchNode[K, V]) scan(iter func(key K, value V) bool, validate bool,
-) bool {
+func (b *branchNode[K, V]) scan(iter func(key K, value V) bool) bool {
 	for i := range b.nodes {
 		kind := b.states[i].kind.Load() & 3
 		if kind == kindBranch {
-			if !(*branchNode[K, V])(b.nodes[i]).scan(iter, validate) {
+			if !(*branchNode[K, V])(b.nodes[i]).scan(iter) {
 				return false
 			}
 		} else {
-			if validate {
-				if kind != kindLeaf {
-					panic("invalid state")
-				}
-			}
 			leaf := (*leafNode[K, V])(b.nodes[i])
 			if leaf != nil {
 				for i := range leaf.items {
@@ -477,7 +410,7 @@ func (b *branchNode[K, V]) scan(iter func(key K, value V) bool, validate bool,
 // It's your responsibility to manage access using a lock, such as with a
 // sync.RWLock.
 func (m *Map[K, V]) Scan(iter func(key K, value V) bool) {
-	m.root.scan(iter, m.validate)
+	m.root.scan(iter)
 }
 
 type Action int
@@ -491,7 +424,9 @@ const (
 // Action performs a direct action on a key.
 // This is the fastest way to access or modify a key, and is available as
 // an alternative to using a transaction for single key operations.
-func (m *Map[K, V]) Action(key K, action func(found bool, val V) (V, Action)) {
+func (m *Map[K, V]) Action(write bool, key K,
+	action func(found bool, val V) (V, Action),
+) error {
 	hash := hashkey(key)
 	b := &m.root
 	var depth int
@@ -505,7 +440,7 @@ func (m *Map[K, V]) Action(key K, action func(found bool, val V) (V, Action)) {
 		}
 		kind = b.states[i].kind.Load()
 		if kind >= 4 {
-			b.cow(int(i), m.validate)
+			b.cow(int(i))
 			runtime.Gosched()
 			continue
 		}
@@ -514,34 +449,28 @@ func (m *Map[K, V]) Action(key K, action func(found bool, val V) (V, Action)) {
 			depth++
 			continue
 		}
-		b.states[i].lock.Lock()
+		b.states[i].lock(write)
 		kind = b.states[i].kind.Load()
 		if kind != kindLeaf {
-			if m.validate {
-				if kind == kindLeafSplit {
-					panic("invalid state")
-				}
-			}
-			b.states[i].lock.Unlock()
+			b.states[i].unlock(write)
 			continue
-		}
-		if m.validate {
-			if b.states[i].txid != 0 {
-				panic("invalid state")
-			}
 		}
 		leaf := (*leafNode[K, V])(b.nodes[i])
 		if leaf == nil {
 			// Not found
 			var val V
 			val, act := action(false, val)
+			if !write && act != NoChange {
+				b.states[i].unlock(write)
+				return ErrNotWritable
+			}
 			if act == Set {
 				leaf = new(leafNode[K, V])
 				b.nodes[i] = unsafe.Pointer(leaf)
 				leaf.items = append(leaf.items, item[K, V]{hash, key, val})
 			}
-			b.states[i].lock.Unlock()
-			return
+			b.states[i].unlock(write)
+			return nil
 		}
 		for j := range leaf.items {
 			if leaf.items[j].hash != hash || leaf.items[j].key != key {
@@ -550,6 +479,10 @@ func (m *Map[K, V]) Action(key K, action func(found bool, val V) (V, Action)) {
 			// Found existing item
 			val := leaf.items[j].value
 			val, act := action(true, val)
+			if !write && act != NoChange {
+				b.states[i].unlock(write)
+				return ErrNotWritable
+			}
 			switch act {
 			case Set:
 				// Replace item
@@ -564,12 +497,16 @@ func (m *Map[K, V]) Action(key K, action func(found bool, val V) (V, Action)) {
 					b.nodes[i] = nil
 				}
 			}
-			b.states[i].lock.Unlock()
-			return
+			b.states[i].unlock(write)
+			return nil
 		}
 		// Not found
 		var val V
 		val, act := action(false, val)
+		if !write && act != NoChange {
+			b.states[i].unlock(write)
+			return ErrNotWritable
+		}
 		if act == Set {
 			leaf.items = append(leaf.items, item[K, V]{hash, key, val})
 			if len(leaf.items) >= mitems {
@@ -580,7 +517,7 @@ func (m *Map[K, V]) Action(key K, action func(found bool, val V) (V, Action)) {
 				b.states[i].kind.Store(kindBranch)
 			}
 		}
-		b.states[i].lock.Unlock()
-		return
+		b.states[i].unlock(write)
+		return nil
 	}
 }

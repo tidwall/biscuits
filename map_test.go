@@ -20,12 +20,11 @@ func TestMapStringKeys(t *testing.T) {
 	N := 1000000
 	T := runtime.GOMAXPROCS(0)
 	var m Map[string, int]
-	m.validate = true
 	lotsa.Output = os.Stdout
 	print("set    ")
 	lotsa.Ops(N, T, func(i, t int) {
 		key := strconv.Itoa(i)
-		tx := m.Begin(key)
+		tx := m.Begin(true, key)
 		_, replaced, _ := tx.Set(key, i)
 		tx.End()
 		if replaced {
@@ -36,7 +35,7 @@ func TestMapStringKeys(t *testing.T) {
 	print("get    ")
 	lotsa.Ops(N, T, func(i, t int) {
 		key := strconv.Itoa(i)
-		tx := m.Begin(key)
+		tx := m.Begin(true, key)
 		value, ok, _ := tx.Get(key)
 		tx.End()
 		if !ok || value != i {
@@ -48,7 +47,7 @@ func TestMapStringKeys(t *testing.T) {
 	lotsa.Ops(N, T, func(i, t int) {
 		// fmt.Printf("== DELETE %d ==\n", i)
 		key := strconv.Itoa(i)
-		tx := m.Begin(key)
+		tx := m.Begin(true, key)
 		value, deleted, err := tx.Delete(key)
 		tx.End()
 		if !deleted || value != i {
@@ -59,7 +58,7 @@ func TestMapStringKeys(t *testing.T) {
 	m.sane(false)
 	for i := 0; i < N; i++ {
 		key := strconv.Itoa(i)
-		tx := m.Begin(key)
+		tx := m.Begin(true, key)
 		_, ok, _ := tx.Get(key)
 		tx.End()
 		if ok {
@@ -74,12 +73,11 @@ func TestMapIntKeys(t *testing.T) {
 	N := 1000000
 	T := runtime.GOMAXPROCS(0)
 	var m Map[int, int]
-	m.validate = true
 	lotsa.Output = os.Stdout
 	print("set    ")
 	lotsa.Ops(N, T, func(i, t int) {
 		key := i
-		tx := m.Begin(key)
+		tx := m.Begin(true, key)
 		_, replaced, _ := tx.Set(key, i)
 		tx.End()
 		if replaced {
@@ -90,7 +88,7 @@ func TestMapIntKeys(t *testing.T) {
 	print("get    ")
 	lotsa.Ops(N, T, func(i, t int) {
 		key := i
-		tx := m.Begin(key)
+		tx := m.Begin(true, key)
 		value, ok, _ := tx.Get(key)
 		tx.End()
 		if !ok || value != i {
@@ -102,7 +100,7 @@ func TestMapIntKeys(t *testing.T) {
 	lotsa.Ops(N, T, func(i, t int) {
 		// fmt.Printf("== DELETE %d ==\n", i)
 		key := i
-		tx := m.Begin(key)
+		tx := m.Begin(true, key)
 		value, deleted, err := tx.Delete(key)
 		tx.End()
 		if !deleted || value != i {
@@ -113,7 +111,7 @@ func TestMapIntKeys(t *testing.T) {
 	m.sane(false)
 	for i := 0; i < N; i++ {
 		key := i
-		tx := m.Begin(key)
+		tx := m.Begin(true, key)
 		_, ok, _ := tx.Get(key)
 		tx.End()
 		if ok {
@@ -128,11 +126,10 @@ func TestActionIntKeys(t *testing.T) {
 	N := 10000000
 	T := runtime.GOMAXPROCS(0)
 	var m Map[int, int]
-	m.validate = true
 	lotsa.Output = os.Stdout
 	print("set    ")
 	lotsa.Ops(N, T, func(i, t int) {
-		m.Action(i, func(found bool, value int) (int, Action) {
+		m.Action(true, i, func(found bool, value int) (int, Action) {
 			if found {
 				panic("!bad news")
 			}
@@ -142,7 +139,7 @@ func TestActionIntKeys(t *testing.T) {
 	m.sane(false)
 	print("get    ")
 	lotsa.Ops(N, T, func(i, t int) {
-		m.Action(i, func(found bool, value int) (int, Action) {
+		m.Action(true, i, func(found bool, value int) (int, Action) {
 			if !found || value != i {
 				panic("!bad news")
 			}
@@ -152,7 +149,7 @@ func TestActionIntKeys(t *testing.T) {
 	m.sane(false)
 	print("delete ")
 	lotsa.Ops(N, T, func(i, t int) {
-		m.Action(i, func(found bool, value int) (int, Action) {
+		m.Action(true, i, func(found bool, value int) (int, Action) {
 			if !found || value != i {
 				panic("!bad news")
 			}
@@ -161,7 +158,7 @@ func TestActionIntKeys(t *testing.T) {
 	})
 	m.sane(false)
 	for i := range N {
-		m.Action(i, func(found bool, value int) (int, Action) {
+		m.Action(true, i, func(found bool, value int) (int, Action) {
 			if found || value != 0 {
 				panic("!bad news")
 			}
@@ -176,11 +173,10 @@ func TestClone(t *testing.T) {
 	N := 1000000
 	T := runtime.GOMAXPROCS(0)
 	var m1 Map[string, int]
-	m1.validate = true
 	lotsa.Output = nil
 	lotsa.Ops(N/2, T, func(i, t int) {
 		key := strconv.Itoa(i)
-		tx := m1.Begin(key)
+		tx := m1.Begin(true, key)
 		old, replaced, err := tx.Set(key, i)
 		tx.End()
 		if err != nil {
@@ -199,17 +195,17 @@ func TestClone(t *testing.T) {
 	lotsa.Ops(N/2, T, func(i, t int) {
 		i += N / 2
 		key := strconv.Itoa(i)
-		tx := m1.Begin(key)
+		tx := m1.Begin(true, key)
 		tx.Set(key, i)
 		tx.End()
 		key = strconv.Itoa(i)
-		tx = m2.Begin(key)
+		tx = m2.Begin(true, key)
 		tx.Set(key, -i)
 		tx.End()
 	})
 	lotsa.Ops(N/2, T, func(i, t int) {
 		key := strconv.Itoa(i)
-		tx := m1.Begin(key)
+		tx := m1.Begin(true, key)
 		value, ok, err := tx.Get(key)
 		tx.End()
 		if err != nil {
@@ -221,7 +217,7 @@ func TestClone(t *testing.T) {
 		if value != i {
 			panic("!mismatch")
 		}
-		tx = m2.Begin(key)
+		tx = m2.Begin(true, key)
 		value, ok, err = tx.Get(key)
 		tx.End()
 		if err != nil {
@@ -237,7 +233,7 @@ func TestClone(t *testing.T) {
 	lotsa.Ops(N/2, T, func(i, t int) {
 		i += N / 2
 		key := strconv.Itoa(i)
-		tx := m1.Begin(key)
+		tx := m1.Begin(true, key)
 		value, ok, err := tx.Get(key)
 		tx.End()
 		if err != nil {
@@ -249,7 +245,7 @@ func TestClone(t *testing.T) {
 		if value != i {
 			panic("!mismatch")
 		}
-		tx = m2.Begin(key)
+		tx = m2.Begin(true, key)
 		value, ok, err = tx.Get(key)
 		tx.End()
 		if err != nil {
@@ -289,7 +285,7 @@ func testPerfBiscuitsMapStringKeys(N, T int) {
 	lotsa.Output = os.Stdout
 	print("set    ")
 	lotsa.Ops(N, T, func(i, t int) {
-		tx := m.Begin(keys[i])
+		tx := m.Begin(true, keys[i])
 		tx.Set(keys[i], i)
 		tx.End()
 	})
@@ -329,19 +325,19 @@ func testPerfBiscuitsTxIntKeys(N, T int) {
 	lotsa.Output = os.Stdout
 	print("set      ")
 	lotsa.Ops(N, T, func(i, t int) {
-		tx := m.Begin(keys[i])
+		tx := m.Begin(true, keys[i])
 		tx.Set(keys[i], i)
 		tx.End()
 	})
 	print("get      ")
 	lotsa.Ops(N, T, func(i, t int) {
-		tx := m.Begin(keys[i])
+		tx := m.Begin(true, keys[i])
 		tx.Get(keys[i])
 		tx.End()
 	})
 	print("delete   ")
 	lotsa.Ops(N, T, func(i, t int) {
-		tx := m.Begin(keys[i])
+		tx := m.Begin(true, keys[i])
 		tx.Delete(keys[i])
 		tx.End()
 	})
@@ -357,19 +353,19 @@ func testPerfBiscuitsActionIntKeys(N, T int) {
 	lotsa.Output = os.Stdout
 	print("set      ")
 	lotsa.Ops(N, T, func(i, t int) {
-		m.Action(keys[i], func(found bool, value int) (int, Action) {
+		m.Action(true, keys[i], func(found bool, value int) (int, Action) {
 			return i, Set
 		})
 	})
 	print("get      ")
 	lotsa.Ops(N, T, func(i, t int) {
-		m.Action(keys[i], func(found bool, value int) (int, Action) {
+		m.Action(true, keys[i], func(found bool, value int) (int, Action) {
 			return 0, NoChange
 		})
 	})
 	print("delete   ")
 	lotsa.Ops(N, T, func(i, t int) {
-		m.Action(keys[i], func(found bool, value int) (int, Action) {
+		m.Action(true, keys[i], func(found bool, value int) (int, Action) {
 			return 0, Delete
 		})
 	})
@@ -415,18 +411,18 @@ func TestExample1(t *testing.T) {
 	var m Map[string, string]
 
 	// Store user 512/Tom
-	tx := m.Begin("512")
+	tx := m.Begin(true, "512")
 	tx.Set("512", "Tom")
 	tx.End()
 
 	// Get user
-	tx = m.Begin("512")
+	tx = m.Begin(true, "512")
 	value, _, _ := tx.Get("512")
 	tx.End()
 	println(value)
 
 	// Delete user
-	tx = m.Begin("512")
+	tx = m.Begin(true, "512")
 	tx.Delete("512")
 	tx.End()
 
@@ -439,14 +435,14 @@ func TestExample2(t *testing.T) {
 	var m Map[string, string]
 
 	// Store users
-	tx := m.Begin("512", "961", "348")
+	tx := m.Begin(true, "512", "961", "348")
 	tx.Set("512", "Tom")
 	tx.Set("961", "Sally")
 	tx.Set("348", "Janet")
 	tx.End()
 
 	// Get two users
-	tx = m.Begin("512", "348")
+	tx = m.Begin(true, "512", "348")
 	value1, _, _ := tx.Get("512")
 	value2, _, _ := tx.Get("348")
 	tx.End()
@@ -454,7 +450,7 @@ func TestExample2(t *testing.T) {
 	println(value2)
 
 	// Delete users
-	tx = m.Begin("512", "961", "348")
+	tx = m.Begin(true, "512", "961", "348")
 	tx.Delete("512")
 	tx.Delete("961")
 	tx.Delete("348")
@@ -469,12 +465,12 @@ func TestExample3(t *testing.T) {
 	var m Map[string, string]
 
 	// Store user 512/Tom
-	m.Action("512", func(found bool, value string) (string, Action) {
+	m.Action(true, "512", func(found bool, value string) (string, Action) {
 		return "Tom", Set
 	})
 
 	// Get user
-	m.Action("512", func(found bool, value string) (string, Action) {
+	m.Action(true, "512", func(found bool, value string) (string, Action) {
 		if found {
 			println(value)
 		}
@@ -482,7 +478,7 @@ func TestExample3(t *testing.T) {
 	})
 
 	// Delete user
-	m.Action("512", func(found bool, value string) (string, Action) {
+	m.Action(true, "512", func(found bool, value string) (string, Action) {
 		return "", Delete
 	})
 
@@ -490,9 +486,7 @@ func TestExample3(t *testing.T) {
 	// Tom
 }
 
-func (b *branchNode[K, V]) sane(print bool, hash uint64, depth int,
-	validate bool,
-) {
+func (b *branchNode[K, V]) sane(print bool, hash uint64, depth int) {
 	for i := range b.nodes {
 		hash = hash << (64 - (depth << hshift)) >> (64 - (depth << hshift))
 		hash |= (uint64(i) << (depth << hshift))
@@ -522,12 +516,7 @@ func (b *branchNode[K, V]) sane(print bool, hash uint64, depth int,
 				}
 				fmt.Printf("\n")
 			}
-			if validate {
-				if b.states[i].txid != 0 {
-					panic("invalid state")
-				}
-			}
-			(*branchNode[K, V])(b.nodes[i]).sane(print, hash, depth+1, validate)
+			(*branchNode[K, V])(b.nodes[i]).sane(print, hash, depth+1)
 		} else {
 			if kind != kindLeaf {
 				panic("invalid kind")
@@ -578,5 +567,5 @@ func (m *Map[K, V]) sane(print bool) {
 	if print {
 		fmt.Printf("== SANE ==\n")
 	}
-	m.root.sane(print, 0, 0, m.validate)
+	m.root.sane(print, 0, 0)
 }

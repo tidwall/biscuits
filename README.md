@@ -1,10 +1,12 @@
 # biscuits
 
+[![GoDoc](https://godoc.org/github.com/tidwall/biscuits?status.svg)](https://godoc.org/github.com/tidwall/biscuits)
+
 Fast concurrent hashmap for rapidly changing keys.
 
 - Designed for high concurrency and low contention
 - Uses a 2PL type locking mechanism
-- Works with string and integer keys
+- Works with string keys
 - Built with a trie structure under the hood
 - O(1) Copy-on-write method
 
@@ -17,18 +19,18 @@ Set, get, and delete.
 var m biscuits.Map[string, string]
 
 // Store user 512/Tom
-tx := m.Begin("512")
+tx := m.Begin(true, "512")
 tx.Set("512", "Tom")
 tx.End()
 
 // Get user
-tx = m.Begin("512")
+tx = m.Begin(false, "512")
 value, _, _ := tx.Get("512")
 tx.End()
 println(value)
 
 // Delete user
-tx = m.Begin("512")
+tx = m.Begin(true, "512")
 tx.Delete("512")
 tx.End()
 
@@ -43,14 +45,14 @@ Multiple keys
 var m biscuits.Map[string, string]
 
 // Store users
-tx := m.Begin("512", "961", "348")
+tx := m.Begin(true, "512", "961", "348")
 tx.Set("512", "Tom")
 tx.Set("961", "Sally")
 tx.Set("348", "Janet")
 tx.End()
 
 // Get two users
-tx = m.Begin("512", "348")
+tx = m.Begin(false, "512", "348")
 value1, _, _ := tx.Get("512")
 value2, _, _ := tx.Get("348")
 tx.End()
@@ -58,7 +60,7 @@ println(value1)
 println(value2)
 
 // Delete users
-tx := m.Begin("512", "961", "348")
+tx := m.Begin(true, "512", "961", "348")
 tx.Delete("512")
 tx.Delete("961")
 tx.Delete("348")
@@ -77,12 +79,12 @@ an alternative to using a transaction for single key operations.
 var m biscuits.Map[string, string]
 
 // Store user 512/Tom
-m.Action("512", func(found bool, value string) (string, biscuits.Action) {
+m.Action(true, "512", func(found bool, value string) (string, biscuits.Action) {
     return "Tom", biscuits.Set
 })
 
 // Get user
-m.Action("512", func(found bool, value string) (string, biscuits.Action) {
+m.Action(false, "512", func(found bool, value string) (string, biscuits.Action) {
     if found {
         println(value)
     }
@@ -90,7 +92,7 @@ m.Action("512", func(found bool, value string) (string, biscuits.Action) {
 })
 
 // Delete user
-m.Action("512", func(found bool, value string) (string, biscuits.Action) {
+m.Action(true, "512", func(found bool, value string) (string, biscuits.Action) {
     return "", biscuits.Delete
 })
 
